@@ -1,0 +1,86 @@
+//My original implementation (Before SirWilliams customization and some options)
+
+#include "rs/util.hpp"
+
+#include "lib.hpp"
+#include "al/util/LiveActorUtil.h"
+#include "al/factory/ActorFactory.h"
+#include "game/StageScene/StageScene.h"
+
+class Togezo;
+
+/*
+ The maximum amount of spinies at once.
+ If the limit is passed when spawning a spiny it will despwan the last spiny.
+ If the game is crashing or lagging, then decrease this.
+ */
+
+const int MAX_SPINIES = 50;
+
+const int SPINY_DISTANCE = 400; //Distance of each spiny to mario (maybe pixels?)
+
+const int SPINY_RATE = 2 * 60; // (120 frames = 2 seconds) change this to change how frequently spinies spawn (in frames).
+
+al::LiveActor* spinies[MAX_SPINIES];
+
+HOOK_DEFINE_TRAMPOLINE(SceneInit){
+    static void Callback(al::ActorInitInfo* info, StageScene* curScene, al::PlacementInfo const* placement, al::LayoutInitInfo const* lytInfo,
+                                                 al::ActorFactory const* factory, al::SceneMsgCtrl* sceneMsgCtrl, al::GameDataHolderBase* dataHolder) {
+
+        al::initActorInitInfo(info, curScene, placement, lytInfo, factory, sceneMsgCtrl, dataHolder);
+        for(int i = 0; i < MAX_SPINIES; i++){
+            spinies[i] = al::createActorFunction<Togezo>("spiny");
+            Logger::log("spiny created\n");
+
+            al::initCreateActorNoPlacementInfo(spinies[i], *info);
+            setTrans(spinies[i], {0.f, -50000.f, 0.f});
+            spinies[i]->makeActorDead();
+        }
+        Orig(info, curScene, placement, lytInfo, factory, sceneMsgCtrl, dataHolder);
+    }
+};
+
+int frameCounter = 0;
+int currentSpinyIndex = 0;
+
+#define QUAT_TO_DIR_VEC(q) {q.x * q.z + q.w * q.y, q.y * q.z - q.w * q.x, 1 - 2 * (q.x * q.x + q.y * q.y)}
+
+HOOK_DEFINE_TRAMPOLINE(UpdateHook) {
+    static void Callback(StageScene *scene) {
+        if(scene->mIsAlive && !scene->isPause()) {
+
+            auto player = rs::getPlayerActor(scene);
+            if (frameCounter % SPINY_RATE == 0) {
+                auto playerTrans = al::getTrans(player);
+                auto q = al::getQuat(player);
+                q.normalize();
+                sead::Vector3f playerQuatVec = QUAT_TO_DIR_VEC(q);
+                auto spinyTrans = playerTrans + playerQuatVec * SPINY_DISTANCE;
+                spinies[currentSpinyIndex]->makeActorAlive();
+                al::setTrans(spinies[currentSpinyIndex], spinyTrans);
+                spinies[currentSpinyIndex]->appear();
+                currentSpinyIndex++;
+                if (currentSpinyIndex >= MAX_SPINIES) currentSpinyIndex = 0;
+            }
+            frameCounter++;
+        }
+        Orig(scene);
+    }
+};
+
+extern "C" void exl_main(void* x0, void* x1) {
+    // Setup hooking enviroment.
+    exl::hook::Initialize();
+
+    SceneInit::InstallAtOffset(0x4C8DD0);
+    //R_ABORT_UNLESS(Logger::instance().init(LOGGER_IP, 3080, false));
+    //InitSpinies::InstallAtOffset(0x41B384);
+    UpdateHook::InstallAtSymbol("_ZN10StageScene7controlEv");
+}
+
+extern "C" NORETURN void exl_exception_entry() {
+    /* TODO: exception handling */
+    EXL_ABORT(0x420);
+}
+
+
